@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.michaelovsky.agentcontrol.bridge.LauncherBridge
+import com.michaelovsky.agentcontrol.bridge.BridgeResult
 import com.michaelovsky.agentcontrol.data.*
 import com.michaelovsky.agentcontrol.domain.*
 import com.michaelovsky.agentcontrol.sync.ConfigStore
@@ -32,6 +33,19 @@ import kotlinx.coroutines.launch
 
 private val activeStatuses = setOf(TaskStatus.DISPATCHING, TaskStatus.IN_PROGRESS, TaskStatus.VERIFYING)
 private val historyStatuses = setOf(TaskStatus.DONE, TaskStatus.CANCELLED)
+
+internal suspend fun dispatchAfterRemoteOpen(
+    openRemote: () -> BridgeResult,
+    dispatch: suspend () -> Unit
+): String {
+    val bridgeResult = openRemote()
+    if (!bridgeResult.accepted) return bridgeResult.message
+    return runCatching { dispatch() }
+        .fold(
+            onSuccess = { bridgeResult.message },
+            onFailure = { "Codex Remote opened, but the mission could not be queued" }
+        )
+}
 
 @Composable
 fun CommandScreen(
@@ -266,8 +280,10 @@ fun MissionDetailScreen(
                     if (UiPolicy.canDispatch(task)) {
                         Button(onClick = {
                             scope.launch {
-                                onDispatch(ExecutorKind.WINDOWS)
-                                message = bridge.openCodexRemote().message
+                                message = dispatchAfterRemoteOpen(
+                                    bridge::openCodexRemote,
+                                    { onDispatch(ExecutorKind.WINDOWS) }
+                                )
                             }
                         }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Start in Android Remote") }
                         OutlinedButton(onClick = { scope.launch { onDispatch(ExecutorKind.WINDOWS); message = "Queued for a new pinned Codex Desktop session" } }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(if (task.status == TaskStatus.FAILED) "Retry in Codex Desktop" else "Start in Codex Desktop") }

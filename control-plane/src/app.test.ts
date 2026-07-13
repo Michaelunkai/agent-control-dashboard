@@ -177,7 +177,10 @@ describe("control plane API", () => {
     }));
     const tool = await postHook("PostToolUse", { tool_name: "shell_command" });
     expect(await tool.json()).toEqual(expect.objectContaining({ currentStep: "Used shell command" }));
-    const stopped = await postHook("Stop", { reason: "completed" });
+    const stopped = await postHook("Stop", {
+      agent_control_result: "DONE",
+      result_summary: "Synchronization fixed and tests passed."
+    });
     expect(stopped.status).toBe(200);
     expect(await stopped.json()).toEqual(expect.objectContaining({
       status: "DONE",
@@ -197,6 +200,35 @@ describe("control plane API", () => {
     }));
   });
 
+  it("keeps ambiguous Codex stops in verification until success evidence arrives", async () => {
+    const store = new InMemoryStore();
+    const app = createApp(store, "test-owner");
+    const postHook = (eventName: string, payload: Record<string, unknown>) => app.request("/v1/hooks/codex", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-owner" },
+      body: JSON.stringify({
+        id: crypto.randomUUID(), eventName, sessionId: "ambiguous-stop",
+        occurredAt: "2026-07-12T10:00:00.000Z", payload
+      })
+    });
+    await postHook("SessionStart", {});
+    const stopped = await postHook("Stop", { reason: "user_interrupted" });
+    expect(await stopped.json()).toEqual(expect.objectContaining({
+      status: "VERIFYING", currentStep: "Verifying results", progressPercent: null,
+      completedAt: null
+    }));
+    expect(await store.hasEvidence("codex:ambiguous-stop")).toBe(false);
+    const ended = await postHook("Stop", {
+      agent_control_result: "DONE",
+      result_summary: "Recovered and verified successfully."
+    });
+    expect(await ended.json()).toEqual(expect.objectContaining({
+      status: "DONE", currentStep: "Completed", progressPercent: 100,
+      completedAt: expect.any(String)
+    }));
+    expect(await store.hasEvidence("codex:ambiguous-stop")).toBe(true);
+  });
+
   it("applies managed desktop hooks to their existing dashboard task", async () => {
     const store = new InMemoryStore();
     const task = await store.createTask({ description: "Managed work", priority: 3, requiredCapabilities: ["coding"] });
@@ -208,13 +240,37 @@ describe("control plane API", () => {
       headers: { "content-type": "application/json", authorization: "Bearer test-owner" },
       body: JSON.stringify({
         id: "managed-stop", eventName: "SessionEnd", sessionId: "desktop-session",
-        taskId: task.id, occurredAt: "2026-07-12T10:00:00.000Z", payload: {}
+        taskId: task.id, occurredAt: "2026-07-12T10:00:00.000Z",
+        payload: { agent_control_result: "DONE", result_summary: "Managed mission verified." }
       })
     });
     expect(await response.json()).toEqual(expect.objectContaining({
       id: task.id, status: "DONE", currentStep: "Completed", progressPercent: 100
     }));
     expect(await store.getTask("codex:desktop-session")).toBeUndefined();
+  });
+
+  it("maps explicit failed and waiting results to attention states", async () => {
+    const store = new InMemoryStore();
+    const app = createApp(store, "test-owner");
+    const postHook = (sessionId: string, payload: Record<string, unknown>) => app.request("/v1/hooks/codex", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-owner" },
+      body: JSON.stringify({
+        id: crypto.randomUUID(), eventName: "Stop", sessionId,
+        occurredAt: "2026-07-12T10:00:00.000Z", payload
+      })
+    });
+    const failed = await postHook("failed-result", {
+      agent_control_result: "FAILED", result_summary: "Build failed after retries."
+    });
+    expect(await failed.json()).toEqual(expect.objectContaining({ status: "FAILED" }));
+    const waiting = await postHook("waiting-result", {
+      agent_control_result: "WAITING", result_summary: "Waiting for an external credential."
+    });
+    expect(await waiting.json()).toEqual(expect.objectContaining({
+      status: "REVIEW", currentStep: "Waiting for attention"
+    }));
   });
 
   it("discovers an already-running Codex session from tool activity", async () => {

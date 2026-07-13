@@ -13,7 +13,16 @@ export interface DesktopLaunchResult {
 
 export function desktopMissionPrompt(task: ClaimedTask): string {
   const marker = `AC-${task.id.slice(0, 8)}`;
-  return `${task.title} [${marker}]\n\nAgent Control mission:\n${task.description}`;
+  return `${task.title} [${marker}]\n\nAgent Control mission:\n${task.description}\n\n${missionResultContract()}`;
+}
+
+export function missionResultContract(): string {
+  return [
+    "Finish your final response with exactly one standalone result line:",
+    "AGENT_CONTROL_RESULT: DONE - only after the requested result is implemented and verified",
+    "AGENT_CONTROL_RESULT: WAITING - when external input or access is still required",
+    "AGENT_CONTROL_RESULT: FAILED - when the mission could not be completed after supported recovery"
+  ].join("\n");
 }
 
 export async function launchPinnedDesktopTask(task: ClaimedTask, workspace: string): Promise<DesktopLaunchResult> {

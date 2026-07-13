@@ -350,6 +350,13 @@ function workspaceTitle(cwd: string): string {
   return `Codex session - ${readable || "Unknown workspace"}`;
 }
 
+function reportedAgentResult(payload: Record<string, unknown>): "DONE" | "WAITING" | "FAILED" | undefined {
+  const value = typeof payload.agent_control_result === "string"
+    ? payload.agent_control_result.trim().toUpperCase()
+    : "";
+  return value === "DONE" || value === "WAITING" || value === "FAILED" ? value : undefined;
+}
+
 function toolActivity(payload: Record<string, unknown>): string {
   const tool = String(payload.tool_name ?? payload.toolName ?? "tool")
     .replace(/[_-]+/g, " ")
@@ -573,11 +580,28 @@ export function createApp(store: TaskStore, ownerToken?: string): Hono {
     }
     if (completionEvent && task.status === TaskStatus.IN_PROGRESS) {
       task = await store.updateProgress(task.id, { progressPercent: null, currentStep: "Verifying results" });
-      task = await store.transition(task.id, TaskStatus.VERIFYING, "codex_stop");
+      task = await store.transition(task.id, TaskStatus.VERIFYING, "codex_stopped");
     }
-    if (completionEvent && task.status === TaskStatus.VERIFYING) {
-      task = await store.updateProgress(task.id, { progressPercent: 100, currentStep: "Completed" });
-      task = await store.transition(task.id, TaskStatus.DONE, "codex_completed");
+    const reportedResult = completionEvent ? reportedAgentResult(input.payload) : undefined;
+    if (reportedResult && task.status === TaskStatus.VERIFYING) {
+      const resultSummary = typeof input.payload.result_summary === "string"
+        ? input.payload.result_summary.trim().slice(0, 4_000)
+        : `Codex reported ${reportedResult.toLowerCase()}`;
+      await store.addEvidence(task.id, {
+        kind: "log",
+        summary: resultSummary || `Codex reported ${reportedResult.toLowerCase()}`,
+        reference: `codex-session:${input.sessionId}`
+      });
+      if (reportedResult === "DONE" && await store.hasEvidence(task.id)) {
+        task = await store.updateProgress(task.id, { progressPercent: 100, currentStep: "Completed" });
+        task = await store.transition(task.id, TaskStatus.DONE, "codex_completion_evidence");
+      } else if (reportedResult === "FAILED") {
+        task = await store.updateProgress(task.id, { progressPercent: null, currentStep: "Failed" });
+        task = await store.transition(task.id, TaskStatus.FAILED, "codex_reported_failure");
+      } else if (reportedResult === "WAITING") {
+        task = await store.updateProgress(task.id, { progressPercent: null, currentStep: "Waiting for attention" });
+        task = await store.transition(task.id, TaskStatus.REVIEW, "codex_waiting_for_attention");
+      }
     }
     return context.json(task);
   });

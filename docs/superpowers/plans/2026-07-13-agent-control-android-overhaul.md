@@ -15,4 +15,3 @@
 13. Build the signed release, confirm package/signing/version continuity, and upgrade the explicitly bound Samsung with `adb install -r`.
 14. On the physical phone, verify launch from the existing home shortcut, preserved data/configuration, keyboard-safe creation, offline creation, online reconciliation, live Codex lifecycle updates, dispatch, progress, completion, and rotation/font-scale resilience.
 15. Save screenshots/logs/hashes, update `VERIFICATION.md`, commit and push the exact verified source.
-

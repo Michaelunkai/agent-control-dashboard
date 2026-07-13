@@ -2,6 +2,29 @@ import { createServer, type Server } from "node:http";
 import { randomUUID } from "node:crypto";
 import { AdapterStore, type HookEnvelope } from "./store.js";
 
+const resultMarker = /^\s*AGENT_CONTROL_RESULT:\s*(DONE|WAITING|FAILED)\s*$/i;
+
+function normalizeHookPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  if (payload.hook_event_name !== "Stop" || typeof payload.last_assistant_message !== "string") {
+    return payload;
+  }
+  const message = payload.last_assistant_message.trim();
+  const lines = message.split(/\r?\n/);
+  const matches = lines
+    .map((line, index) => ({ index, match: line.match(resultMarker) }))
+    .filter((entry): entry is { index: number; match: RegExpMatchArray } => entry.match !== null);
+  let finalLine = lines.length - 1;
+  while (finalLine >= 0 && lines[finalLine]?.trim().length === 0) finalLine -= 1;
+  if (matches.length !== 1 || matches[0]?.index !== finalLine) return payload;
+  const result = matches[0].match[1];
+  const resultSummary = lines.slice(0, finalLine).join("\n").trim().slice(0, 4_000);
+  return {
+    ...payload,
+    agent_control_result: result,
+    result_summary: resultSummary || `Codex reported ${result.toLowerCase()}`
+  };
+}
+
 export function createAdapterHttpServer(
   store: AdapterStore,
   createId: () => string = randomUUID
@@ -23,7 +46,8 @@ export function createAdapterHttpServer(
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
       try {
-        const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        const rawPayload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        const payload = normalizeHookPayload(rawPayload);
         const eventName = String(payload.hook_event_name ?? payload.event ?? "");
         const sessionId = String(payload.session_id ?? "");
         if (!eventName || !sessionId) {

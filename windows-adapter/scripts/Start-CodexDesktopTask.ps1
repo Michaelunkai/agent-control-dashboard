@@ -25,6 +25,10 @@ Agent Control mission:
 $description
 
 Work autonomously. Keep this session's progress understandable, verify the result, and finish with a concise summary.
+Finish the final response with exactly one standalone result line:
+AGENT_CONTROL_RESULT: DONE - only after the requested result is implemented and verified
+AGENT_CONTROL_RESULT: WAITING - when external input or access is still required
+AGENT_CONTROL_RESULT: FAILED - when the mission could not be completed after supported recovery
 "@
 $pinStatePath = Join-Path $env:USERPROFILE '.codex\.codex-global-state.json'
 $sessionsRoot = Join-Path $env:USERPROFILE '.codex\sessions'

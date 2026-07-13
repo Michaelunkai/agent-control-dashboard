@@ -35,6 +35,59 @@ describe("adapter HTTP server", () => {
       body: JSON.stringify({ session_id: "missing-event" })
     })).status).toBe(400);
   });
+
+  it("derives a verified mission result from the documented Stop message", async () => {
+    const { baseUrl, store } = await startServer();
+    const response = await fetch(`${baseUrl}/hooks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        hook_event_name: "Stop",
+        session_id: "session-result",
+        last_assistant_message: "Tests passed.\n\nAGENT_CONTROL_RESULT: DONE"
+      })
+    });
+    expect(response.status).toBe(202);
+    expect(store.pending()[0]?.envelope.payload).toEqual(expect.objectContaining({
+      agent_control_result: "DONE",
+      result_summary: "Tests passed."
+    }));
+  });
+
+  it("does not infer completion when a Stop message has no result marker", async () => {
+    const { baseUrl, store } = await startServer();
+    await fetch(`${baseUrl}/hooks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        hook_event_name: "Stop",
+        session_id: "session-interrupted",
+        last_assistant_message: "Partial work only"
+      })
+    });
+    expect(store.pending()[0]?.envelope.payload).not.toHaveProperty("agent_control_result");
+  });
+
+  it("rejects duplicate or non-final result markers as ambiguous", async () => {
+    const { baseUrl, store } = await startServer();
+    for (const [index, lastAssistantMessage] of [
+      "AGENT_CONTROL_RESULT: DONE\nAGENT_CONTROL_RESULT: FAILED",
+      "AGENT_CONTROL_RESULT: DONE\nAdditional unverified text"
+    ].entries()) {
+      await fetch(`${baseUrl}/hooks`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          hook_event_name: "Stop",
+          session_id: `session-ambiguous-${index}`,
+          last_assistant_message: lastAssistantMessage
+        })
+      });
+    }
+    for (const pending of store.pending()) {
+      expect(pending.envelope.payload).not.toHaveProperty("agent_control_result");
+    }
+  });
 });
 
 async function startServer(): Promise<{ baseUrl: string; store: AdapterStore }> {

@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { launchPinnedDesktopTask } from "./desktop-launcher.js";
+import { launchPinnedDesktopTask, missionResultContract } from "./desktop-launcher.js";
 import type { ClaimedTask } from "./sync.js";
 
 export interface ExecutionResult {
@@ -29,7 +29,9 @@ export async function executeTask(task: ClaimedTask, taskRoot: string): Promise<
     "",
     `Dashboard task: ${task.id}`,
     "",
-    "Continue the mission from the submitted prompt, report meaningful progress, verify the result, and finish clearly."
+    "Continue the mission from the submitted prompt, report meaningful progress, verify the result, and finish clearly.",
+    "",
+    missionResultContract()
   ].join("\n"), "utf8");
 
   const launched = await launchPinnedDesktopTask(task, workspace);

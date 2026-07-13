@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { repairHookRegistration } from "./hook-registration.js";
 
 const roots: string[] = [];
@@ -47,5 +50,33 @@ describe("hook registration self-repair", () => {
     expect(Object.keys(hooks)).toEqual(expect.arrayContaining([
       "SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"
     ]));
+  });
+
+  it("emits the SessionStart result contract as valid hook JSON in PowerShell 5", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-control-hook-runtime-"));
+    roots.push(root);
+    const script = join(dirname(fileURLToPath(import.meta.url)), "..", "hooks", "Invoke-AgentControlHook.ps1");
+    const result = spawnSync("powershell.exe", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script
+    ], {
+      input: JSON.stringify({ hook_event_name: "SessionStart", session_id: "runtime-contract" }),
+      encoding: "utf8",
+      timeout: 15_000,
+      env: {
+        ...process.env,
+        AgentControl__HookEndpoint: "http://127.0.0.1:1/hooks",
+        AgentControl__HookFallbackPath: join(root, "fallback.jsonl")
+      }
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const output = JSON.parse(result.stdout.trim()) as {
+      continue: boolean;
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
+    };
+    expect(output.continue).toBe(true);
+    expect(output.hookSpecificOutput.hookEventName).toBe("SessionStart");
+    expect(output.hookSpecificOutput.additionalContext).toContain("AGENT_CONTROL_RESULT: DONE");
+    expect(output.hookSpecificOutput.additionalContext).toContain("AGENT_CONTROL_RESULT: WAITING");
+    expect(output.hookSpecificOutput.additionalContext).toContain("AGENT_CONTROL_RESULT: FAILED");
   });
 });

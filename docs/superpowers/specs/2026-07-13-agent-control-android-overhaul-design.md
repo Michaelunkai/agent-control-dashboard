@@ -98,4 +98,3 @@ Managed Windows work reports real pipeline stages: assigned, preparing, executin
 - Room migration preserves existing tasks and configuration.
 - Unit, integration, lint, release build, production API, emulator, and physical Samsung checks pass.
 - The physical update uses `adb install -r`; package data and the existing home shortcut remain intact.
-
