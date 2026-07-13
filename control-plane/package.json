@@ -1,0 +1,30 @@
+{
+  "name": "@agent-control/control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "db:migrate": "node --env-file=.env.local scripts/migrate-postgres.mjs",
+    "test:postgres": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run src/postgres-store.integration.test.ts",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@agent-control/protocol": "file:vendor/agent-control-protocol-0.1.1.tgz",
+    "@vercel/functions": "^3.7.5",
+    "hono": "^4.8.3",
+    "pg": "^8.22.0",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260708.1",
+    "@types/pg": "^8.20.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "miniflare": "^4.20260708.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.24.3"
+  }
+}

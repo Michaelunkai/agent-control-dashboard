@@ -1,0 +1,12 @@
+name = "agent-control"
+main = "src/worker.ts"
+compatibility_date = "2026-07-12"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "agent-control"
+database_id = "replace-during-deployment"
+migrations_dir = "migrations"
+
+[vars]
+AUTH_MODE = "github-owner"

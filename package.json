@@ -1,0 +1,17 @@
+{
+  "name": "agent-control",
+  "private": true,
+  "scripts": {
+    "install:all": "npm ci --prefix protocol && npm ci --prefix control-plane && npm ci --prefix windows-adapter",
+    "build": "npm run build --prefix protocol && npm run build --prefix control-plane && npm run build --prefix windows-adapter",
+    "test": "npm run test --prefix protocol && npm run test --prefix control-plane && npm run test --prefix windows-adapter",
+    "test:coverage": "npm run test:coverage --prefix protocol && npm run test:coverage --prefix control-plane && npm run test:coverage --prefix windows-adapter",
+    "typecheck": "npm run typecheck --prefix protocol && npm run typecheck --prefix control-plane && npm run typecheck --prefix windows-adapter",
+    "audit:production": "npm audit --omit=dev --prefix protocol && npm audit --omit=dev --prefix control-plane && npm audit --omit=dev --prefix windows-adapter",
+    "verify:powershell5": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-PowerShell5.ps1",
+    "verify:portability": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-PackagePortability.ps1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

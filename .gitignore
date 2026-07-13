@@ -1,0 +1,42 @@
+# Secrets and deployment state
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+.vercel/
+**/.vercel/
+.wrangler/
+**/.wrangler/
+
+# Dependencies and generated output
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+coverage/
+**/coverage/
+.gradle/
+**/.gradle/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+*.log
+*.zip
+
+# Signing material and unpublished Android packages
+*.jks
+*.keystore
+*.aab
+*.apk
+!release/*.apk
+
+# Runtime state
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
