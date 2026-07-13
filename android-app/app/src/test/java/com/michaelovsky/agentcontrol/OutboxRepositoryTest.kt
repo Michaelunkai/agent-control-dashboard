@@ -40,19 +40,26 @@ class OutboxRepositoryTest {
 
     @Test
     fun createTaskWritesTaskAndOutboxAtomically() = runTest {
-        repository.createTask("Upgrade dashboard accessibility", 4)
-        assertEquals(1, repository.observeTasks().first().size)
-        assertEquals(1, repository.observePendingSyncCount().first())
+        repository.createTask("Upgrade dashboard", "Upgrade dashboard accessibility", 4, ExecutorKind.WINDOWS)
+        val task = repository.observeTasks().first().single()
+        assertEquals(TaskStatus.QUEUED, task.status)
+        assertEquals(2, task.version)
+        assertEquals(2, repository.observePendingSyncCount().first())
         val pending = database.outboxDao().pending(10)
-        assertEquals(1, pending.size)
-        assertTrue(pending.single().payload.contains("Upgrade dashboard accessibility"))
-        assertTrue(pending.single().payload.contains("\"clientId\""))
+        assertEquals(listOf("create_task", "dispatch_task"), pending.map { it.operation })
+        assertEquals(2, database.outboxDao().pendingForAggregate(task.id))
+        database.outboxDao().remove(pending.first().id)
+        assertEquals(1, database.outboxDao().pendingForAggregate(task.id))
+        assertTrue(pending.first().payload.contains("Upgrade dashboard accessibility"))
+        assertTrue(pending.first().payload.contains("\"clientId\""))
+        assertTrue(pending.first().payload.contains("\"title\":\"Upgrade dashboard\""))
+        assertTrue(pending.last().payload.contains("\"preferredExecutor\":\"windows\""))
+        assertTrue(pending.last().payload.contains("\"expectedVersion\":1"))
     }
 
     @Test
     fun offlineDispatchUpdatesBoardAndQueuesVersionCheckedAction() = runTest {
-        val id = repository.createTask("Run Android release verification", 5)
-        repository.dispatch(id, ExecutorKind.WINDOWS)
+        repository.createTask("Run Android release verification", 5)
         val task = repository.observeTasks().first().single()
         assertEquals(TaskStatus.QUEUED, task.status)
         assertEquals(2, task.version)

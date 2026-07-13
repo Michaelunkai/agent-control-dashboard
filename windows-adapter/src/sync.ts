@@ -6,6 +6,8 @@ export interface ClaimedTask {
   description: string;
   status: string;
   version: number;
+  progressPercent?: number | null;
+  currentStep?: string | null;
 }
 
 function headers(ownerToken: string): Record<string, string> {
@@ -71,6 +73,13 @@ export async function flushOutbox(
         if (response.status >= 500) break;
         continue;
       }
+      const result = await response.clone().json().catch(() => undefined) as { status?: string } | undefined;
+      if (
+        item.envelope.taskId && result?.status &&
+        ["DONE", "FAILED", "CANCELLED"].includes(result.status)
+      ) {
+        store.clearManagedSession(item.envelope.sessionId);
+      }
       store.complete(item.sequence);
       completed += 1;
     } catch (error) {
@@ -111,6 +120,22 @@ async function postJson(
   });
 }
 
+export async function updateTaskStage(
+  apiUrl: string,
+  ownerToken: string,
+  task: ClaimedTask,
+  currentStep: string,
+  progressPercent: number | null
+): Promise<ClaimedTask> {
+  const response = await postJson(
+    `${apiUrl.replace(/\/$/, "")}/v1/tasks/${encodeURIComponent(task.id)}/progress`,
+    ownerToken,
+    { currentStep, progressPercent, expectedVersion: task.version }
+  );
+  if (!response.ok) throw new Error(`progress_update_failed:${response.status}`);
+  return await response.json() as ClaimedTask;
+}
+
 export async function completeTask(
   apiUrl: string,
   ownerToken: string,
@@ -132,7 +157,12 @@ export async function completeTask(
     expectedVersion: task.version
   });
   if (!verifying.ok) throw new Error(`verify_transition_failed:${verifying.status}`);
-  const changed = await verifying.json() as { version: number };
+  const changed = await verifying.json() as ClaimedTask;
+  try {
+    await updateTaskStage(base, ownerToken, { ...task, ...changed }, "Complete", 100);
+  } catch {
+    // Completion is authoritative; a final cosmetic progress update must not strand VERIFYING work.
+  }
   const completed = await postJson(`${base}/v1/tasks/${encoded}/complete`, ownerToken, {});
   if (!completed.ok) throw new Error(`completion_failed:${completed.status}:${changed.version}`);
 }

@@ -9,6 +9,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   required_capabilities JSONB NOT NULL,
   dependencies JSONB NOT NULL,
   assigned_agent_id TEXT,
+  progress_percent INTEGER,
+  current_step TEXT,
+  started_at TEXT,
+  completed_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

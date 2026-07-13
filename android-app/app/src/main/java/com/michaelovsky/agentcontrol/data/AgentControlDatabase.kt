@@ -16,8 +16,8 @@ class Converters {
 }
 
 @Database(
-    entities = [TaskEntity::class, OutboxEntity::class, AgentEntity::class, ApprovalEntity::class],
-    version = 2,
+    entities = [TaskEntity::class, TaskEventEntity::class, OutboxEntity::class, AgentEntity::class, ApprovalEntity::class],
+    version = 3,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -26,6 +26,7 @@ abstract class AgentControlDatabase : RoomDatabase() {
     abstract fun outboxDao(): OutboxDao
     abstract fun agentDao(): AgentDao
     abstract fun approvalDao(): ApprovalDao
+    abstract fun taskEventDao(): TaskEventDao
 
     companion object {
         @Volatile private var instance: AgentControlDatabase? = null
@@ -35,7 +36,7 @@ abstract class AgentControlDatabase : RoomDatabase() {
                 context.applicationContext,
                 AgentControlDatabase::class.java,
                 "agent-control.db"
-            ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
         }
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -50,6 +51,25 @@ abstract class AgentControlDatabase : RoomDatabase() {
                         status TEXT NOT NULL,
                         createdAt TEXT NOT NULL,
                         decidedAt TEXT
+                    )""".trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tasks ADD COLUMN progressPercent INTEGER")
+                db.execSQL("ALTER TABLE tasks ADD COLUMN currentStep TEXT")
+                db.execSQL("ALTER TABLE tasks ADD COLUMN startedAt TEXT")
+                db.execSQL("ALTER TABLE tasks ADD COLUMN completedAt TEXT")
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS task_events (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        taskId TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        message TEXT NOT NULL,
+                        createdAt TEXT NOT NULL,
+                        progressPercent INTEGER
                     )""".trimIndent()
                 )
             }

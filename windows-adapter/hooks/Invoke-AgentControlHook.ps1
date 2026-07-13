@@ -3,10 +3,6 @@ param()
 $ErrorActionPreference = "Stop"
 $endpoint = "http://127.0.0.1:17867/hooks"
 $fallback = Join-Path $env:LOCALAPPDATA "AgentControl\hook-fallback.jsonl"
-if (-not [string]::IsNullOrWhiteSpace($env:AGENT_CONTROL_MANAGED_TASK_ID)) {
-    Write-Output '{"continue":true}'
-    exit 0
-}
 $payload = [Console]::In.ReadToEnd().Trim()
 if ([string]::IsNullOrWhiteSpace($payload)) {
     exit 0

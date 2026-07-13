@@ -39,6 +39,10 @@ export interface Task {
   requiredCapabilities: string[];
   dependencies: string[];
   assignedAgentId?: string;
+  progressPercent?: number | null;
+  currentStep?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
 }
 
 export type TaskEventType =
@@ -47,6 +51,7 @@ export type TaskEventType =
   | "progress"
   | "evidence_added"
   | "title_changed"
+  | "details_updated"
   | "agent_assigned";
 
 export interface TaskEvent {
@@ -165,12 +170,38 @@ export function reduceTaskEvent(task: Task, event: TaskEvent): Task {
       updatedAt: event.occurredAt
     };
   }
+  if (event.type === "progress") {
+    const progress = event.payload.progressPercent;
+    return {
+      ...task,
+      progressPercent: progress == null ? null : Math.max(0, Math.min(100, Number(progress))),
+      currentStep: event.payload.currentStep == null ? task.currentStep : String(event.payload.currentStep),
+      version: event.sequence,
+      updatedAt: event.occurredAt
+    };
+  }
+  if (event.type === "details_updated") {
+    return {
+      ...task,
+      title: event.payload.title == null ? task.title : String(event.payload.title),
+      description: event.payload.description == null ? task.description : String(event.payload.description),
+      pinnedTitle: event.payload.pinnedTitle == null ? task.pinnedTitle : Boolean(event.payload.pinnedTitle),
+      requiredCapabilities: Array.isArray(event.payload.requiredCapabilities)
+        ? event.payload.requiredCapabilities.map(String)
+        : task.requiredCapabilities,
+      dependencies: Array.isArray(event.payload.dependencies)
+        ? event.payload.dependencies.map(String)
+        : task.dependencies,
+      version: event.sequence,
+      updatedAt: event.occurredAt
+    };
+  }
   return { ...task, version: event.sequence, updatedAt: event.occurredAt };
 }
 
 export function createTaskTitle(description: string): string {
-  const cleaned = description
-    .replace(/^(please|could you|can you|i want you to|i need you to)\s+/i, "")
+  const cleaned = collapseAdjacentRepetitions(description)
+    .replace(/^(?:(?:please|could you|can you|i want you to|i need you to)\s+)+/i, "")
     .replace(/\b(immediately|please|for me)\b/gi, "")
     .replace(/\bthe\s+(?=(android|windows|dashboard|login)\b)/gi, "")
     .replace(/\bapplication\b/gi, "application")
@@ -182,4 +213,58 @@ export function createTaskTitle(description: string): string {
   if (titled.length <= 80) return titled;
   const shortened = titled.slice(0, 77).replace(/\s+\S*$/, "").trimEnd();
   return `${shortened}...`;
+}
+
+function collapseAdjacentRepetitions(value: string): string {
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let index = 0; index < words.length && !changed; index += 1) {
+      const maximum = Math.min(16, Math.floor((words.length - index) / 2));
+      for (let length = 1; length <= maximum; length += 1) {
+        const first = words.slice(index, index + length).join(" ").toLowerCase();
+        const second = words.slice(index + length, index + length * 2).join(" ").toLowerCase();
+        if (first === second) {
+          words.splice(index + length, length);
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+  return words.join(" ");
+}
+
+export function createWorkspaceTitle(workspace?: string): string {
+  const normalized = workspace?.trim().replace(/[\\/]+$/, "");
+  const folder = normalized?.split(/[\\/]/).filter(Boolean).at(-1);
+  if (!folder) return "Codex session - Unknown workspace";
+  const readable = folder
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+  return `Codex session - ${readable || "Unknown workspace"}`;
+}
+
+export function resolveTaskTitle(
+  description: string,
+  manualTitle?: string | null
+): { title: string; pinnedTitle: boolean } {
+  const supplied = manualTitle?.replace(/\s+/g, " ").trim();
+  if (!supplied) return { title: createTaskTitle(description), pinnedTitle: false };
+  const title = supplied.length <= 80
+    ? supplied
+    : `${supplied.slice(0, 77).replace(/\s+\S*$/, "").trimEnd()}...`;
+  return { title, pinnedTitle: true };
+}
+
+export function validateProgressPercent(value: number | null): number | null {
+  if (value === null) return null;
+  if (!Number.isInteger(value) || value < 0 || value > 100) {
+    throw new Error("invalid_progress_percent");
+  }
+  return value;
 }

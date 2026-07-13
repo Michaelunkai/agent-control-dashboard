@@ -18,7 +18,8 @@ class DatabaseMigrationTest {
     @get:Rule
     val helper = MigrationTestHelper(
         InstrumentationRegistry.getInstrumentation(),
-        AgentControlDatabase::class.java.canonicalName,
+        AgentControlDatabase::class.java,
+        emptyList(),
         FrameworkSQLiteOpenHelperFactory()
     )
 
@@ -84,6 +85,43 @@ class DatabaseMigrationTest {
                 assertEquals(7, cursor.getInt(2))
                 assertEquals("windows-test", cursor.getString(3))
                 assertEquals("conflict", cursor.getString(4))
+            }
+        }
+    }
+
+    @Test
+    fun migration2To3PreservesTasksAndAddsNullableActivityAndEvents() {
+        helper.createDatabase(databaseName, 2).use { database ->
+            database.insert("tasks", 0, ContentValues().apply {
+                put("id", "preserved-v2")
+                put("title", "Preserved mission")
+                put("description", "Existing data remains intact")
+                put("status", "IN_PROGRESS")
+                put("priority", 4)
+                put("version", 9)
+                put("createdAt", "2026-07-12T00:00:00Z")
+                put("updatedAt", "2026-07-12T01:00:00Z")
+                put("assignedAgentId", "windows-codex")
+                put("syncState", "synced")
+            })
+        }
+
+        helper.runMigrationsAndValidate(
+            databaseName, 3, true, AgentControlDatabase.MIGRATION_2_3
+        ).use { database ->
+            database.query(
+                "SELECT title, priority, version, progressPercent, currentStep, startedAt, completedAt " +
+                    "FROM tasks WHERE id='preserved-v2'"
+            ).use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("Preserved mission", cursor.getString(0))
+                assertEquals(4, cursor.getInt(1))
+                assertEquals(9, cursor.getInt(2))
+                for (index in 3..6) assertEquals(true, cursor.isNull(index))
+            }
+            database.query("SELECT COUNT(*) FROM task_events").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(0, cursor.getInt(0))
             }
         }
     }

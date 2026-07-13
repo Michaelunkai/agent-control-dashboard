@@ -11,6 +11,9 @@ interface TaskDao {
     @Query("SELECT * FROM tasks ORDER BY CASE status WHEN 'IN_PROGRESS' THEN 0 WHEN 'WAITING_APPROVAL' THEN 1 WHEN 'READY' THEN 2 ELSE 3 END, priority DESC, updatedAt DESC")
     fun observeAll(): Flow<List<TaskEntity>>
 
+    @Query("SELECT * FROM tasks WHERE id = :id")
+    fun observe(id: String): Flow<TaskEntity?>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(task: TaskEntity)
 
@@ -28,6 +31,15 @@ interface TaskDao {
 }
 
 @Dao
+interface TaskEventDao {
+    @Query("SELECT * FROM task_events WHERE taskId = :taskId ORDER BY createdAt DESC")
+    fun observeForTask(taskId: String): Flow<List<TaskEventEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(events: List<TaskEventEntity>)
+}
+
+@Dao
 interface OutboxDao {
     @Query("SELECT COUNT(*) FROM outbox")
     fun observePendingCount(): Flow<Int>
@@ -40,6 +52,9 @@ interface OutboxDao {
 
     @Query("DELETE FROM outbox WHERE id = :id")
     suspend fun remove(id: String)
+
+    @Query("SELECT COUNT(*) FROM outbox WHERE aggregateId = :aggregateId")
+    suspend fun pendingForAggregate(aggregateId: String): Int
 
     @Query("UPDATE outbox SET attempts = attempts + 1, lastError = :error WHERE id = :id")
     suspend fun recordFailure(id: String, error: String)

@@ -22,7 +22,7 @@ describe("adapter HTTP server", () => {
     expect(hook.status).toBe(202);
     expect(await hook.json()).toEqual({ id: "generated-id" });
     const health = await fetch(`${baseUrl}/health`);
-    expect(await health.json()).toEqual({ status: "ok", pending: 1 });
+    expect(await health.json()).toEqual({ status: "ok", pending: 1, managedTaskId: null });
     expect(store.activeTaskId()).toBe("codex:session-http");
   });
 

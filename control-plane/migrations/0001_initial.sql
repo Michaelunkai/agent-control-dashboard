@@ -10,6 +10,10 @@ CREATE TABLE tasks (
   dependencies TEXT NOT NULL,
   assigned_agent_id TEXT,
   preferred_executor TEXT,
+  progress_percent INTEGER,
+  current_step TEXT,
+  started_at TEXT,
+  completed_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

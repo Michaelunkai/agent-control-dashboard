@@ -17,25 +17,39 @@ class TaskRepository(
     fun observeAgents(): Flow<List<AgentEntity>> = database.agentDao().observeAll()
     fun observeApprovals(): Flow<List<ApprovalEntity>> = database.approvalDao().observePending()
     fun observePendingSyncCount(): Flow<Int> = database.outboxDao().observePendingCount()
+    fun observeTask(id: String): Flow<TaskEntity?> = database.taskDao().observe(id)
+    fun observeTaskEvents(id: String): Flow<List<TaskEventEntity>> = database.taskEventDao().observeForTask(id)
 
-    suspend fun createTask(description: String, priority: Int): String {
+    suspend fun createTask(
+        title: String,
+        description: String,
+        priority: Int,
+        executor: ExecutorKind
+    ): String {
         val id = UUID.randomUUID().toString()
-        val now = Instant.now().toString()
+        val createdAt = Instant.now()
+        val now = createdAt.toString()
+        val dispatchAt = createdAt.plusMillis(1).toString()
         val task = TaskEntity(
             id = id,
-            title = TaskPolicy.createTitle(description),
+            title = title.trim().ifBlank { TaskPolicy.createTitle(description) },
             description = description.trim(),
-            status = TaskStatus.READY,
+            status = TaskStatus.QUEUED,
             priority = priority.coerceIn(1, 5),
-            version = 1,
+            version = 2,
             createdAt = now,
             updatedAt = now
         )
         val payload = JSONObject()
             .put("clientId", id)
             .put("description", task.description)
+            .put("title", task.title)
             .put("priority", task.priority)
             .put("requiredCapabilities", org.json.JSONArray().put("coding"))
+            .toString()
+        val dispatchPayload = JSONObject()
+            .put("preferredExecutor", executor.name.lowercase())
+            .put("expectedVersion", 1)
             .toString()
         database.withTransaction {
             database.taskDao().upsert(task)
@@ -48,10 +62,22 @@ class TaskRepository(
                     createdAt = now
                 )
             )
+            database.outboxDao().insert(
+                OutboxEntity(
+                    id = UUID.randomUUID().toString(),
+                    operation = "dispatch_task",
+                    aggregateId = id,
+                    payload = dispatchPayload,
+                    createdAt = dispatchAt
+                )
+            )
         }
         onOutboxChanged()
         return id
     }
+
+    suspend fun createTask(description: String, priority: Int): String =
+        createTask(TaskPolicy.createTitle(description), description, priority, ExecutorKind.WINDOWS)
 
     suspend fun dispatch(id: String, executor: ExecutorKind) {
         val current = database.taskDao().get(id) ?: error("task_not_found")

@@ -21,6 +21,10 @@ describeDatabase("PostgresTaskStore", () => {
     await pool.query(migration);
     const executorMigration = await readFile(new URL("../migrations/0003_task_executor.sql", import.meta.url), "utf8");
     await pool.query(executorMigration);
+    const activityMigration = await readFile(
+      new URL("../migrations/0004_task_activity_postgres.sql", import.meta.url), "utf8"
+    );
+    await pool.query(activityMigration);
     store = new PostgresTaskStore(pool);
   });
 
@@ -56,6 +60,33 @@ describeDatabase("PostgresTaskStore", () => {
     expect((await store.sync(0)).events.filter((event) => event.taskId === id)).toHaveLength(2);
   });
 
+  it("persists task details, progress, and lifecycle timestamps", async () => {
+    const id = `${namespace}-lifecycle`;
+    taskIds.push(id);
+    const created = await store.createTask({
+      id,
+      title: "Pinned PostgreSQL task",
+      description: "Original description",
+      priority: 4,
+      requiredCapabilities: []
+    });
+    const detailed = await store.updateDetails(id, "Replacement description", "Generated title", created.version);
+    expect(detailed.title).toBe("Pinned PostgreSQL task");
+    const progressed = await store.updateProgress(id, {
+      progressPercent: 65,
+      currentStep: "Running integration checks"
+    }, detailed.version);
+    const queued = await store.transition(id, TaskStatus.QUEUED, "test", progressed.version);
+    const active = await store.transition(id, TaskStatus.IN_PROGRESS, "test", queued.version);
+    expect(await store.getTask(id)).toEqual(expect.objectContaining({
+      progressPercent: 65,
+      currentStep: "Running integration checks",
+      startedAt: active.startedAt
+    }));
+    expect((await store.sync(0)).events.filter((event) => event.taskId === id).map((event) => event.type))
+      .toEqual(["task_created", "details_updated", "progress", "status_changed", "status_changed"]);
+  });
+
   it("persists agents, approvals, and evidence", async () => {
     const agentId = `${namespace}-agent`;
     agentIds.push(agentId);
@@ -84,6 +115,11 @@ describeDatabase("PostgresTaskStore", () => {
     await expect(store.decideApproval(approval.id, "rejected")).rejects.toThrow("approval_already_decided");
     await store.addEvidence(taskId, { kind: "test", summary: "Neon integration passed" });
     expect(await store.hasEvidence(taskId)).toBe(true);
+    expect((await store.sync(0)).events).toContainEqual(expect.objectContaining({
+      taskId,
+      type: "evidence_added",
+      payload: expect.objectContaining({ summary: "Neon integration passed" })
+    }));
   });
 
   it("atomically assigns Windows work to only one agent", async () => {

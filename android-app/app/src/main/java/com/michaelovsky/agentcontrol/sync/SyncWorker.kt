@@ -4,16 +4,15 @@ import android.content.Context
 import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
 import com.michaelovsky.agentcontrol.data.AgentControlDatabase
-import com.michaelovsky.agentcontrol.data.TaskEntity
 import com.michaelovsky.agentcontrol.data.AgentEntity
 import com.michaelovsky.agentcontrol.data.ApprovalEntity
-import com.michaelovsky.agentcontrol.domain.TaskStatus
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
@@ -62,7 +61,9 @@ class SyncWorker(
                 if (code in 200..299) {
                     database.withTransaction {
                         database.outboxDao().remove(item.id)
-                        database.taskDao().markSynced(item.aggregateId)
+                        if (database.outboxDao().pendingForAggregate(item.aggregateId) == 0) {
+                            database.taskDao().markSynced(item.aggregateId)
+                        }
                     }
                 } else if (code == 409) {
                     database.withTransaction {
@@ -93,28 +94,11 @@ class SyncWorker(
                 return Result.retry()
             }
             val response = connection.inputStream.bufferedReader().use { it.readText() }
-            val root = JSONObject(response)
-            val tasks = root.getJSONArray("tasks")
-            val mapped = buildList {
-                for (index in 0 until tasks.length()) {
-                    val task = tasks.getJSONObject(index)
-                    add(TaskEntity(
-                        id = task.getString("id"),
-                        title = task.getString("title"),
-                        description = task.getString("description"),
-                        status = TaskStatus.valueOf(task.getString("status")),
-                        priority = task.getInt("priority"),
-                        version = task.getLong("version"),
-                        createdAt = task.getString("createdAt"),
-                        updatedAt = task.getString("updatedAt"),
-                        assignedAgentId = task.optString("assignedAgentId").ifBlank { null },
-                        syncState = "synced"
-                    ))
-                }
-            }
+            val mapped = SyncPayloadMapper.parse(response)
             database.withTransaction {
-                database.taskDao().upsertAll(mapped)
-                config.syncCursor = root.getLong("cursor")
+                database.taskDao().upsertAll(mapped.tasks)
+                database.taskEventDao().upsertAll(mapped.events)
+                config.syncCursor = mapped.cursor
             }
             val agentsConnection = URL("${config.apiUrl}/v1/agents").openConnection() as HttpURLConnection
             agentsConnection.requestMethod = "GET"
@@ -181,6 +165,7 @@ class SyncWorker(
     }
 
     companion object {
+        const val SYNC_NOW_WORK_NAME = "agent-control-sync-now"
         fun factoryFor(database: AgentControlDatabase, config: ConfigStore): WorkerFactory =
             object : WorkerFactory() {
                 override fun createWorker(
@@ -210,7 +195,11 @@ class SyncWorker(
             val request = androidx.work.OneTimeWorkRequestBuilder<SyncWorker>()
                 .setConstraints(androidx.work.Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build()
-            WorkManager.getInstance(context).enqueue(request)
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                SYNC_NOW_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                request
+            )
         }
     }
 }

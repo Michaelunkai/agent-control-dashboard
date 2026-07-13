@@ -70,4 +70,20 @@ describe("AdapterStore", () => {
     expect(reopened.activeTaskId()).toBeUndefined();
     reopened.close();
   });
+
+  it("binds managed desktop sessions to their existing dashboard task", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-control-"));
+    roots.push(root);
+    const store = new AdapterStore(join(root, "adapter.db"));
+    store.bindManagedSession("task-managed", "session-managed");
+    store.enqueue({
+      id: "managed-event", eventName: "PostToolUse", sessionId: "session-managed",
+      occurredAt: new Date().toISOString(), payload: { tool_name: "shell_command" }
+    });
+    expect(store.managedTaskId()).toBe("task-managed");
+    expect(store.pending()[0].envelope.taskId).toBe("task-managed");
+    store.clearManagedSession("session-managed");
+    expect(store.managedTaskId()).toBeUndefined();
+    store.close();
+  });
 });

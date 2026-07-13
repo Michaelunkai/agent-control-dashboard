@@ -1,3 +1,6 @@
 .vercel
 .env*
 !.env.example
+
+.vercel
+.env*

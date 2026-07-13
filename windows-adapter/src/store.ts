@@ -6,6 +6,7 @@ export interface HookEnvelope {
   id: string;
   eventName: string;
   sessionId: string;
+  taskId?: string;
   occurredAt: string;
   payload: Record<string, unknown>;
 }
@@ -39,6 +40,11 @@ export class AdapterStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS managed_sessions (
+        session_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL UNIQUE,
+        bound_at TEXT NOT NULL
+      );
     `);
   }
 
@@ -54,12 +60,14 @@ export class AdapterStore {
       JSON.stringify(envelope.payload)
     );
     if (envelope.eventName === "SessionStart" || envelope.eventName === "UserPromptSubmit") {
+      const taskId = this.taskForSession(envelope.sessionId) ?? `codex:${envelope.sessionId}`;
       this.database.prepare(
         "INSERT INTO adapter_state(key,value) VALUES('active_task',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
-      ).run(`codex:${envelope.sessionId}`);
-    } else if (envelope.eventName === "Stop") {
+      ).run(taskId);
+    } else if (envelope.eventName === "Stop" || envelope.eventName === "SessionEnd") {
+      const taskId = this.taskForSession(envelope.sessionId) ?? `codex:${envelope.sessionId}`;
       this.database.prepare("DELETE FROM adapter_state WHERE key='active_task' AND value=?")
-        .run(`codex:${envelope.sessionId}`);
+        .run(taskId);
     }
   }
 
@@ -85,6 +93,36 @@ export class AdapterStore {
     return row?.value;
   }
 
+  bindManagedSession(taskId: string, sessionId: string): void {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare("DELETE FROM managed_sessions WHERE task_id=? OR session_id=?").run(taskId, sessionId);
+      this.database.prepare(
+        "INSERT INTO managed_sessions(session_id,task_id,bound_at) VALUES(?,?,?)"
+      ).run(sessionId, taskId, new Date().toISOString());
+      this.database.prepare(
+        "UPDATE adapter_state SET value=? WHERE key='active_task' AND value=?"
+      ).run(taskId, `codex:${sessionId}`);
+      this.setManagedTask(taskId);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  taskForSession(sessionId: string): string | undefined {
+    const row = this.database.prepare("SELECT task_id FROM managed_sessions WHERE session_id=?")
+      .get(sessionId) as { task_id: string } | undefined;
+    return row?.task_id;
+  }
+
+  clearManagedSession(sessionId: string): void {
+    const taskId = this.taskForSession(sessionId);
+    this.database.prepare("DELETE FROM managed_sessions WHERE session_id=?").run(sessionId);
+    if (taskId && this.managedTaskId() === taskId) this.setManagedTask();
+  }
+
   pending(limit = 50): OutboxItem[] {
     const rows = this.database.prepare(`
       SELECT sequence,id,event_name,session_id,occurred_at,payload,attempts,last_error
@@ -96,6 +134,7 @@ export class AdapterStore {
         id: String(row.id),
         eventName: String(row.event_name),
         sessionId: String(row.session_id),
+        taskId: this.taskForSession(String(row.session_id)),
         occurredAt: String(row.occurred_at),
         payload: JSON.parse(String(row.payload)) as Record<string, unknown>
       },

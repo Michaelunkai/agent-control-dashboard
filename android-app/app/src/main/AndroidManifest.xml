@@ -7,6 +7,7 @@
 
     <queries>
         <package android:name="com.michaelovsky.codexapplauncher" />
+        <package android:name="com.openai.chatgpt" />
     </queries>
 
     <application

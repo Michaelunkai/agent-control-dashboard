@@ -6,7 +6,7 @@ compatibility_date = "2026-07-12"
 binding = "DB"
 database_name = "agent-control"
 database_id = "replace-during-deployment"
-migrations_dir = "migrations"
+migrations_dir = "migrations/d1"
 
 [vars]
 AUTH_MODE = "github-owner"

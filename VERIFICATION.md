@@ -1,99 +1,102 @@
-# Agent Control 0.2.2 Verification
+# Agent Control 0.4.1 Verification
 
 Verified on July 13, 2026.
 
 ## Release Artifact
 
-- APK: `release\agent-control-0.2.2.apk`
+- APK: `release\agent-control-0.4.1.apk`
 - Package: `com.michaelovsky.agentcontrol`
-- Version code: `4`
-- Version name: `0.2.2`
-- Minimum Android API: `26`
-- Target Android API: `36`
-- Size: `1,151,725` bytes
-- SHA-256: `E471AEC8DAE4067F3E62116536B26BBC2350289B753923418500EF0D2E8981D6`
-- Signer SHA-256:
-  `f913ec8ccfae6c2813ed25f162f17a01b1d8f34b89893c13e67c337207a2d7d1`
+- Version code/name: `7` / `0.4.1`
+- Android API range: `26` minimum, `36` target
+- Size: `1,170,769` bytes
+- SHA-256: `DDDAE530119731DDFB8E42717D355F1C9701D02E3368D3BB4E75E84D8488501E`
+- Signer SHA-256: `f913ec8ccfae6c2813ed25f162f17a01b1d8f34b89893c13e67c337207a2d7d1`
 - APK Signature Scheme v2: verified
+- The signer matches every previously installed Agent Control release.
 
 ## Automated Results
 
-- Shared protocol: 6/6 tests passed.
-- Control plane: 15/15 generic tests passed.
-- PostgreSQL integration: 3/3 tests passed.
-- Windows adapter: 18/18 tests passed.
-- Android unit tests: passed.
-- Android debug lint: passed.
-- Android release vital lint: passed.
-- TypeScript type checks and production builds: passed.
+- Shared protocol: 15/15 tests passed.
+- Control plane: 22/22 portable tests passed.
+- PostgreSQL integration: 4/4 tests passed against the production database.
+- Windows adapter: 26/26 tests passed.
+- Android JVM tests, debug lint, and release vital lint passed.
+- Six Android instrumentation flows passed on a clean API 34 emulator; the
+  production-credential-only case was intentionally skipped.
+- TypeScript type checks and production builds passed for every subsystem.
 - Production dependency audit: zero vulnerabilities.
+- PowerShell 5.1 parsing passed for all seven adapter scripts.
+- `git diff --check`: passed.
 
-## Portable Study Package
+## Lifecycle Behavior
 
-- Final source path: `F:\study\AI_ML\AI_and_Machine_Learning\Artificial_Intelligence\cli\codex\agent-control-dashboard`.
-- Independent component lockfiles avoid npm workspace links and install cleanly
-  on the exFAT study volume.
-- Clean `npm run install:all` completed for protocol, control plane, and Windows
-  adapter with zero audit findings.
-- All 39 generic Node tests passed from the final study path.
-- Type checks and production builds passed for all three Node components.
-- Six PowerShell files parsed successfully under Windows PowerShell 5.1.
-- The Windows scheduled-task launcher passed a regression check proving it
-  resolves Node and `dist\server.js` without a machine-specific checkout path.
-- Nine Android unit tests passed from the final study path with zero failures.
-- Android debug lint, release vital lint, and release assembly passed from the
-  final study path.
-- The packaged APK retained SHA-256
-  `E471AEC8DAE4067F3E62116536B26BBC2350289B753923418500EF0D2E8981D6`
-  and independently passed APK Signature Scheme v2 verification.
+- `SessionStart`, `UserPromptSubmit`, and `PostToolUse` create or reactivate a
+  mission and move it through ready, queued, and in-progress states.
+- Prompt text updates the readable title and full mission description.
+- Tool activity updates current activity and progress while work is running.
+- `Stop` and `SessionEnd` advance active work through verification to done,
+  set progress to 100%, and record completion.
+- Late hooks cannot reopen or mutate terminal tasks.
+- Managed dashboard tasks remain active after Desktop launch. Their original
+  task ID is bound to the new pinned Codex session, and only that session's
+  real lifecycle completion can finish the mission.
+- Android foreground synchronization runs every three seconds; WorkManager
+  continues durable background and reconnect synchronization.
+- PostgreSQL, Room, and the offline outbox persist task detail, progress,
+  activity, approvals, waiting, failure, and completion data.
 
-## Android Runtime Results
+## Dispatch Safety
 
-- Signed release installed in place on a physical Samsung `SM-S938B` using
-  `adb install -r`.
-- Existing app data and the original first-install timestamp
-  `2026-07-13 01:40:57` were preserved.
-- Pulled installed APK hash exactly matched the release APK hash.
-- Cold launch and home-shortcut cold launch succeeded with zero fatal Android
-  runtime exceptions.
-- WorkManager's release-only constructor was inspected in the minimized DEX and
-  verified on the physical device.
-- Synchronization status now updates live across `ConfigStore` instances without
-  requiring an activity restart.
-- Offline instrumentation passed with airplane mode enabled and network
-  reachability unavailable.
-- Room migration and dashboard behavior passed offline.
-- Production instrumentation verified periodic WorkManager scheduling.
-- Production task roundtrip completed through the live control plane.
-- Outbox drained to zero and the persisted sync state reported success.
-- Physical home shortcut:
-  `docs\evidence\agent-control-home-shortcut.png`
-- Shortcut launch proof:
-  `docs\evidence\agent-control-home-shortcut-launched.png`
+- Android offers Remote and Desktop launch controls only for dispatchable
+  ready, waiting, or failed tasks.
+- Queued and active missions cannot be dispatched twice; they show their
+  current execution state and retain only the cancel action.
+- Desktop dispatch always starts Codex for the requested workspace and refuses
+  to create a task unless that workspace is visible in Codex Desktop.
+- The native thread-pinning tool must succeed before the adapter binds the
+  dashboard task to the session.
+- Android Remote opens through the official `com.openai.chat://codex/open`
+  deep link.
 
-## Production Results
+## Windows Runtime
+
+- Scheduled task: `AgentControlWindowsAdapter`.
+- Local health endpoint: `http://127.0.0.1:17867/health`.
+- All five hooks are installed and verified: `SessionStart`,
+  `UserPromptSubmit`, `PostToolUse`, `Stop`, and `SessionEnd`.
+- Hook registration self-repairs every 30 seconds.
+- Durable SQLite state preserves hook outbox events and managed
+  task-to-session bindings across process restarts.
+
+## Production Runtime
 
 - Control plane: `https://agent-control-phi.vercel.app`
-- Deployment: `dpl_BGQFSjaVCHN7UKuT4JhYtkeibAZf`
-- Health endpoint: healthy.
-- Missing or incorrect owner token: rejected with HTTP 401.
-- Authorized owner request: accepted.
-- Client-provided executor availability is ignored.
-- Dispatch availability is derived from fresh server-side agent heartbeats.
-- Windows adapter health: `{"status":"ok","pending":0}`.
-- Windows adapter now sends execution heartbeats every 30 seconds, preventing
-  long-running Codex work from making the PC appear offline.
-- Idle heartbeats clear stale `currentTaskId` state.
-- Real production executor task:
-  `f929bb71-33e0-4e54-b3de-f068d167dd40`
-- Executor result: `DONE`.
-- Exact evidence marker:
-  `Agent Control Android to Windows proof 1783908598`
+- Deployment: `dpl_2LXRhR7Ethapi6uYonW1JLFDa3eh`
+- Deployment target/status: production / ready
+- PostgreSQL migration `0004_task_activity_postgres.sql`: applied
+- Health endpoint: `{"status":"ok"}`
+- Owner-token authentication remains required on every non-health route.
 
-## Physical Acceptance
+## Physical Samsung Acceptance
 
-The physical installation, package readback, live synchronization, launcher
-shortcut creation, shortcut cold launch, Android task creation, production
-Windows claim, periodic execution heartbeat, evidence upload, and final `DONE`
-transition have all been directly verified. No uninstall, app-data clear, device
-reboot, or shared ADB daemon restart was used.
+- Target: Samsung `SM-S938B`, hardware serial `R5CY610XJGV`.
+- AADB 0.2.0 doctor passed and matched the bound hardware; the shared ADB
+  daemon was not restarted.
+- Release installed successfully in place with `adb install -r`; app data was
+  neither uninstalled nor cleared.
+- Installed package readback: version code `7`, version name `0.4.1`.
+- Existing encrypted production configuration survived the upgrade.
+- Main UI readback showed `Everything synchronized`, working, waiting, and
+  attention counts, readable mission names, live steps, progress, priority,
+  assignment, and synchronization state.
+- Failed mission detail showed `Start in Android Remote`, `Retry in Codex
+  Desktop`, `Stop and cancel`, and ordered activity history.
+- Queued mission detail hid duplicate launch controls and showed `Waiting for
+  an available executor` plus `Stop and cancel`.
+- Dashboard proof: `docs\evidence\agent-control-0.4.1-synced.png`
+- Failed-detail proof: `docs\evidence\agent-control-0.4.1-failed-detail.png`
+- Queued-detail proof: `docs\evidence\agent-control-0.4.1-queued-detail.png`
+
+The installed Android app, hosted control plane, PostgreSQL schema, Windows
+adapter, Codex hooks, offline storage, reconnect path, and user-visible mission
+states were checked on their actual runtime paths.

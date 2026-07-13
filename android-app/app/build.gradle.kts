@@ -12,8 +12,8 @@ android {
         applicationId = "com.michaelovsky.agentcontrol"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.2"
+        versionCode = 7
+        versionName = "0.4.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         val defaultApiUrl = providers.gradleProperty("agentControlApiUrl").orElse("").get()

@@ -43,6 +43,32 @@ describe("D1TaskStore", () => {
     expect(page.events).toHaveLength(2);
   });
 
+  it("persists manual titles, details, progress, and lifecycle timestamps", async () => {
+    const created = await store.createTask({
+      id: "d1-lifecycle",
+      title: "Pinned D1 task",
+      description: "Original D1 description",
+      priority: 3,
+      requiredCapabilities: []
+    });
+    expect(created).toEqual(expect.objectContaining({ pinnedTitle: true, progressPercent: null }));
+    const detailed = await store.updateDetails(created.id, "Replacement description", "Generated replacement");
+    expect(detailed.title).toBe("Pinned D1 task");
+    const progressed = await store.updateProgress(created.id, {
+      progressPercent: 40,
+      currentStep: "Writing durable state"
+    }, detailed.version);
+    const queued = await store.transition(created.id, TaskStatus.QUEUED, "test", progressed.version);
+    const active = await store.transition(created.id, TaskStatus.IN_PROGRESS, "test", queued.version);
+    expect(await store.getTask(created.id)).toEqual(expect.objectContaining({
+      progressPercent: 40,
+      currentStep: "Writing durable state",
+      startedAt: active.startedAt
+    }));
+    expect((await store.sync(0)).events.filter((event) => event.taskId === created.id).map((event) => event.type))
+      .toEqual(["task_created", "details_updated", "progress", "status_changed", "status_changed"]);
+  });
+
   it("persists agents, approvals, and evidence", async () => {
     const agent: Agent = {
       id: "desktop-d1", name: "Windows Codex", kind: "windows",
@@ -60,5 +86,10 @@ describe("D1TaskStore", () => {
     expect((await store.decideApproval(approval.id, "approved")).status).toBe("approved");
     await store.addEvidence(task.id, { kind: "test", summary: "Release tests passed" });
     expect(await store.hasEvidence(task.id)).toBe(true);
+    expect((await store.sync(0)).events).toContainEqual(expect.objectContaining({
+      taskId: task.id,
+      type: "evidence_added",
+      payload: expect.objectContaining({ summary: "Release tests passed" })
+    }));
   });
 });

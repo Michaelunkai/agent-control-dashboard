@@ -3,6 +3,8 @@ import { TaskStatus } from "@agent-control/protocol";
 import { createApp, InMemoryStore } from "./control-app.js";
 
 describe("control plane API", () => {
+  const headers = { "content-type": "application/json", authorization: "Bearer test-owner" };
+
   it("creates a task and returns it through incremental sync", async () => {
     const app = createApp(new InMemoryStore(), "test-owner");
     const created = await app.request("/v1/tasks", {
@@ -46,6 +48,65 @@ describe("control plane API", () => {
     expect(body.tasks.filter((task) => task.id === "stable-id")).toHaveLength(1);
   });
 
+  it("accepts and pins an optional manual title on create", async () => {
+    const app = createApp(new InMemoryStore(), "test-owner");
+    const response = await app.request("/v1/tasks", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ description: "Fix the synchronization issue", title: "Release blocker" })
+    });
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual(expect.objectContaining({
+      title: "Release blocker",
+      pinnedTitle: true
+    }));
+  });
+
+  it("updates task details and records honest progress through authenticated endpoints", async () => {
+    const store = new InMemoryStore();
+    const app = createApp(store, "test-owner");
+    const task = await store.createTask({
+      description: "Codex session in C:\\repo",
+      priority: 3,
+      requiredCapabilities: ["coding"]
+    });
+    const details = await app.request(`/v1/tasks/${task.id}/details`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ description: "Fix the offline sync", title: "Fix offline sync" })
+    });
+    expect(details.status).toBe(200);
+    const detailed = await details.json() as { version: number };
+    const progress = await app.request(`/v1/tasks/${task.id}/progress`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ progressPercent: null, currentStep: "Inspecting synchronization", expectedVersion: detailed.version })
+    });
+    expect(progress.status).toBe(200);
+    expect(await progress.json()).toEqual(expect.objectContaining({
+      description: "Fix the offline sync",
+      title: "Fix offline sync",
+      progressPercent: null,
+      currentStep: "Inspecting synchronization"
+    }));
+    const sync = await store.sync(0);
+    expect(sync.events.map((event) => event.type)).toEqual([
+      "task_created",
+      "details_updated",
+      "progress"
+    ]);
+  });
+
+  it("rejects out-of-range progress", async () => {
+    const store = new InMemoryStore();
+    const app = createApp(store, "test-owner");
+    const task = await store.createTask({ description: "Run checks", priority: 3, requiredCapabilities: [] });
+    const response = await app.request(`/v1/tasks/${task.id}/progress`, {
+      method: "POST", headers, body: JSON.stringify({ progressPercent: 101, currentStep: "Running" })
+    });
+    expect(response.status).toBe(400);
+  });
+
   it("rejects unauthenticated requests", async () => {
     const app = createApp(new InMemoryStore(), "test-owner");
     const response = await app.request("/v1/sync?cursor=0");
@@ -84,7 +145,7 @@ describe("control plane API", () => {
     expect((await dispatch.json() as { status: string }).status).toBe("WAITING_QUOTA");
   });
 
-  it("turns Codex lifecycle hooks into one durable task", async () => {
+  it("turns all Codex lifecycle hooks into one descriptive durable task", async () => {
     const app = createApp(new InMemoryStore(), "test-owner");
     const postHook = (eventName: string, payload: Record<string, unknown>) => app.request("/v1/hooks/codex", {
       method: "POST",
@@ -97,18 +158,102 @@ describe("control plane API", () => {
         payload
       })
     });
-    expect((await postHook("UserPromptSubmit", {
+    const started = await postHook("SessionStart", { cwd: "C:\\work\\agent-control-dashboard" });
+    expect(await started.json()).toEqual(expect.objectContaining({
+      title: "Codex session - Agent Control Dashboard",
+      status: "IN_PROGRESS",
+      currentStep: "Session started",
+      startedAt: expect.any(String)
+    }));
+    const prompted = await postHook("UserPromptSubmit", {
       prompt: "Fix the offline dashboard synchronization",
-      cwd: "C:\\repo"
-    })).status).toBe(200);
+      cwd: "C:\\work\\agent-control-dashboard"
+    });
+    expect(await prompted.json()).toEqual(expect.objectContaining({
+      title: "Fix the offline dashboard synchronization",
+      description: "Fix the offline dashboard synchronization",
+      currentStep: "Working on request",
+      progressPercent: null
+    }));
+    const tool = await postHook("PostToolUse", { tool_name: "shell_command" });
+    expect(await tool.json()).toEqual(expect.objectContaining({ currentStep: "Used shell command" }));
     const stopped = await postHook("Stop", { reason: "completed" });
     expect(stopped.status).toBe(200);
-    expect((await stopped.json() as { status: string }).status).toBe("VERIFYING");
+    expect(await stopped.json()).toEqual(expect.objectContaining({
+      status: "DONE",
+      currentStep: "Completed",
+      progressPercent: 100,
+      completedAt: expect.any(String)
+    }));
     const sync = await app.request("/v1/sync?cursor=0", {
       headers: { authorization: "Bearer test-owner" }
     });
     const body = await sync.json() as { tasks: Array<{ id: string; status: string }> };
     expect(body.tasks.filter((task) => task.id === "codex:session-42")).toHaveLength(1);
+
+    const late = await postHook("PostToolUse", { tool_name: "apply_patch" });
+    expect(await late.json()).toEqual(expect.objectContaining({
+      status: "DONE", currentStep: "Completed", progressPercent: 100
+    }));
+  });
+
+  it("applies managed desktop hooks to their existing dashboard task", async () => {
+    const store = new InMemoryStore();
+    const task = await store.createTask({ description: "Managed work", priority: 3, requiredCapabilities: ["coding"] });
+    const queued = await store.transition(task.id, TaskStatus.QUEUED, "dispatch");
+    await store.transition(task.id, TaskStatus.IN_PROGRESS, "claimed", queued.version);
+    const app = createApp(store, "test-owner");
+    const response = await app.request("/v1/hooks/codex", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-owner" },
+      body: JSON.stringify({
+        id: "managed-stop", eventName: "SessionEnd", sessionId: "desktop-session",
+        taskId: task.id, occurredAt: "2026-07-12T10:00:00.000Z", payload: {}
+      })
+    });
+    expect(await response.json()).toEqual(expect.objectContaining({
+      id: task.id, status: "DONE", currentStep: "Completed", progressPercent: 100
+    }));
+    expect(await store.getTask("codex:desktop-session")).toBeUndefined();
+  });
+
+  it("discovers an already-running Codex session from tool activity", async () => {
+    const app = createApp(new InMemoryStore(), "test-owner");
+    const response = await app.request("/v1/hooks/codex", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-owner" },
+      body: JSON.stringify({
+        id: "late-tool-event",
+        eventName: "PostToolUse",
+        sessionId: "already-running",
+        occurredAt: "2026-07-12T10:00:00.000Z",
+        payload: { cwd: "C:\\work\\dashboard", tool_name: "apply_patch" }
+      })
+    });
+    expect(await response.json()).toEqual(expect.objectContaining({
+      id: "codex:already-running",
+      status: "IN_PROGRESS",
+      currentStep: "Used apply patch",
+      startedAt: expect.any(String)
+    }));
+  });
+
+  it("sets completion timestamps when work reaches done", async () => {
+    const store = new InMemoryStore();
+    const task = await store.createTask({ description: "Complete work", priority: 3, requiredCapabilities: [] });
+    const queued = await store.transition(task.id, TaskStatus.QUEUED, "test");
+    const active = await store.transition(task.id, TaskStatus.IN_PROGRESS, "test", queued.version);
+    expect(active.startedAt).toEqual(expect.any(String));
+    const verifying = await store.transition(task.id, TaskStatus.VERIFYING, "test", active.version);
+    await store.addEvidence(task.id, { kind: "test", summary: "Passed" });
+    const sync = await store.sync(0);
+    expect(sync.events).toContainEqual(expect.objectContaining({
+      taskId: task.id,
+      type: "evidence_added",
+      payload: expect.objectContaining({ summary: "Passed" })
+    }));
+    const done = await store.transition(task.id, TaskStatus.DONE, "test", verifying.version);
+    expect(done.completedAt).toEqual(expect.any(String));
   });
 
   it("registers agents and updates heartbeats", async () => {

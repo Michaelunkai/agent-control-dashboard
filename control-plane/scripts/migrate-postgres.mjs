@@ -7,7 +7,8 @@ if (!connectionString) throw new Error("DATABASE_URL_UNPOOLED or DATABASE_URL is
 
 const migrations = await Promise.all([
   readFile(new URL("../migrations/0002_postgres.sql", import.meta.url), "utf8"),
-  readFile(new URL("../migrations/0003_task_executor.sql", import.meta.url), "utf8")
+  readFile(new URL("../migrations/0003_task_executor.sql", import.meta.url), "utf8"),
+  readFile(new URL("../migrations/0004_task_activity_postgres.sql", import.meta.url), "utf8")
 ]);
 const client = new pg.Client({ connectionString });
 

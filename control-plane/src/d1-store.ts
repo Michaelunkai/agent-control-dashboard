@@ -1,5 +1,7 @@
-import { createTaskTitle, TaskStatus, type Agent, type Task, type TaskEvent } from "@agent-control/protocol";
-import type { Approval, Evidence, SyncPage, TaskStore } from "./control-app.js";
+import { createTaskTitle, TaskStatus, type Agent } from "@agent-control/protocol";
+import type {
+  Approval, CreateTaskInput, Evidence, LifecycleEvent, LifecycleTask, ProgressUpdate, SyncPage, TaskStore
+} from "./control-app.js";
 
 interface TaskRow {
   id: string;
@@ -12,11 +14,15 @@ interface TaskRow {
   required_capabilities: string;
   dependencies: string;
   assigned_agent_id: string | null;
+  progress_percent: number | null;
+  current_step: string | null;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
-function mapTask(row: TaskRow): Task {
+function mapTask(row: TaskRow): LifecycleTask {
   return {
     id: row.id,
     title: row.title,
@@ -29,37 +35,47 @@ function mapTask(row: TaskRow): Task {
     dependencies: JSON.parse(row.dependencies) as string[],
     assignedAgentId: row.assigned_agent_id ?? undefined,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
+    progressPercent: row.progress_percent,
+    currentStep: row.current_step,
+    startedAt: row.started_at,
+    completedAt: row.completed_at
   };
 }
 
 export class D1TaskStore implements TaskStore {
   constructor(private readonly db: D1Database) {}
 
-  async createTask(input: Pick<Task, "description" | "priority" | "requiredCapabilities"> & { id?: string }): Promise<Task> {
+  async createTask(input: CreateTaskInput): Promise<LifecycleTask> {
     const id = input.id ?? crypto.randomUUID();
     const eventId = crypto.randomUUID();
     const now = new Date().toISOString();
-    const task: Task = {
+    const manualTitle = input.title?.replace(/\s+/g, " ").trim();
+    const task: LifecycleTask = {
       id,
-      title: createTaskTitle(input.description),
+      title: manualTitle || input.generatedTitle || createTaskTitle(input.description),
       description: input.description,
       status: TaskStatus.READY,
       priority: input.priority,
       version: 1,
-      pinnedTitle: false,
+      pinnedTitle: Boolean(manualTitle),
       requiredCapabilities: input.requiredCapabilities,
       dependencies: [],
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      progressPercent: null,
+      currentStep: null,
+      startedAt: null,
+      completedAt: null
     };
     await this.db.batch([
       this.db.prepare(
         `INSERT INTO tasks
-         (id,title,description,status,priority,version,pinned_title,required_capabilities,dependencies,created_at,updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`
-      ).bind(id, task.title, task.description, task.status, task.priority, 1, 0,
-        JSON.stringify(task.requiredCapabilities), "[]", now, now),
+         (id,title,description,status,priority,version,pinned_title,required_capabilities,dependencies,
+          progress_percent,current_step,started_at,completed_at,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(id, task.title, task.description, task.status, task.priority, 1, task.pinnedTitle ? 1 : 0,
+        JSON.stringify(task.requiredCapabilities), "[]", null, null, null, null, now, now),
       this.db.prepare(
         `INSERT INTO task_events (id,task_id,type,occurred_at,idempotency_key,payload)
          VALUES (?,?,?,?,?,?)`
@@ -68,12 +84,45 @@ export class D1TaskStore implements TaskStore {
     return task;
   }
 
-  async getTask(id: string): Promise<Task | undefined> {
+  async getTask(id: string): Promise<LifecycleTask | undefined> {
     const row = await this.db.prepare("SELECT * FROM tasks WHERE id = ?").bind(id).first<TaskRow>();
     return row ? mapTask(row) : undefined;
   }
 
-  async transition(id: string, to: TaskStatus, reason: string, expectedVersion?: number): Promise<Task> {
+  async updateDetails(id: string, description: string, title?: string, expectedVersion?: number): Promise<LifecycleTask> {
+    const current = await this.getTask(id);
+    if (!current) throw new Error("task_not_found");
+    if (expectedVersion !== undefined && current.version !== expectedVersion) throw new Error("version_conflict");
+    const now = new Date().toISOString();
+    const version = current.version + 1;
+    const nextTitle = current.pinnedTitle ? current.title : createTaskTitle(title ?? description);
+    await this.db.batch([
+      this.db.prepare("UPDATE tasks SET title=?,description=?,version=?,updated_at=? WHERE id=? AND version=?")
+        .bind(nextTitle, description, version, now, id, current.version),
+      this.db.prepare(`INSERT INTO task_events (id,task_id,type,occurred_at,idempotency_key,payload)
+        VALUES (?,?,?,?,?,?)`).bind(crypto.randomUUID(), id, "details_updated", now, `details:${id}:${version}`,
+        JSON.stringify({ title: nextTitle, description }))
+    ]);
+    return { ...current, title: nextTitle, description, version, updatedAt: now };
+  }
+
+  async updateProgress(id: string, update: ProgressUpdate, expectedVersion?: number): Promise<LifecycleTask> {
+    const current = await this.getTask(id);
+    if (!current) throw new Error("task_not_found");
+    if (expectedVersion !== undefined && current.version !== expectedVersion) throw new Error("version_conflict");
+    const now = new Date().toISOString();
+    const version = current.version + 1;
+    await this.db.batch([
+      this.db.prepare("UPDATE tasks SET progress_percent=?,current_step=?,version=?,updated_at=? WHERE id=? AND version=?")
+        .bind(update.progressPercent, update.currentStep, version, now, id, current.version),
+      this.db.prepare(`INSERT INTO task_events (id,task_id,type,occurred_at,idempotency_key,payload)
+        VALUES (?,?,?,?,?,?)`).bind(crypto.randomUUID(), id, "progress", now, `progress:${id}:${version}`,
+        JSON.stringify(update))
+    ]);
+    return { ...current, ...update, version, updatedAt: now };
+  }
+
+  async transition(id: string, to: TaskStatus, reason: string, expectedVersion?: number): Promise<LifecycleTask> {
     const current = await this.getTask(id);
     if (!current) throw new Error("task_not_found");
     if (expectedVersion !== undefined && current.version !== expectedVersion) throw new Error("version_conflict");
@@ -81,25 +130,27 @@ export class D1TaskStore implements TaskStore {
     if (!canTransition(current.status, to)) throw new Error("invalid_status_transition");
     const now = new Date().toISOString();
     const version = current.version + 1;
+    const startedAt = to === TaskStatus.IN_PROGRESS && !current.startedAt ? now : current.startedAt;
+    const completedAt = to === TaskStatus.DONE ? now : current.completedAt;
     await this.db.batch([
-      this.db.prepare("UPDATE tasks SET status=?, version=?, updated_at=? WHERE id=? AND version=?")
-        .bind(to, version, now, id, current.version),
+      this.db.prepare("UPDATE tasks SET status=?,version=?,updated_at=?,started_at=?,completed_at=? WHERE id=? AND version=?")
+        .bind(to, version, now, startedAt, completedAt, id, current.version),
       this.db.prepare(
         `INSERT INTO task_events (id,task_id,type,occurred_at,idempotency_key,payload)
          VALUES (?,?,?,?,?,?)`
       ).bind(crypto.randomUUID(), id, "status_changed", now, `status:${id}:${version}`,
         JSON.stringify({ from: current.status, to, reason }))
     ]);
-    return { ...current, status: to, version, updatedAt: now };
+    return { ...current, status: to, version, updatedAt: now, startedAt, completedAt };
   }
 
-  async queue(id: string, executor: "cloud" | "android" | "windows" | "future", expectedVersion?: number): Promise<Task> {
+  async queue(id: string, executor: "cloud" | "android" | "windows" | "future", expectedVersion?: number): Promise<LifecycleTask> {
     const task = await this.transition(id, TaskStatus.QUEUED, `dispatch:${executor}`, expectedVersion);
     await this.db.prepare("UPDATE tasks SET preferred_executor=? WHERE id=?").bind(executor, id).run();
     return task;
   }
 
-  async claim(agentId: string, capabilities: string[]): Promise<Task | undefined> {
+  async claim(agentId: string, capabilities: string[]): Promise<LifecycleTask | undefined> {
     const resumed = await this.db.prepare(
       "SELECT * FROM tasks WHERE assigned_agent_id=? AND status=? ORDER BY updated_at LIMIT 1"
     ).bind(agentId, TaskStatus.IN_PROGRESS).first<TaskRow>();
@@ -116,8 +167,9 @@ export class D1TaskStore implements TaskStore {
     const version = current.version + 1;
     const results = await this.db.batch([
       this.db.prepare(
-        "UPDATE tasks SET status=?,assigned_agent_id=?,version=?,updated_at=? WHERE id=? AND status=? AND version=?"
-      ).bind(TaskStatus.IN_PROGRESS, agentId, version, now, current.id, TaskStatus.QUEUED, current.version),
+        "UPDATE tasks SET status=?,assigned_agent_id=?,version=?,updated_at=?,started_at=? WHERE id=? AND status=? AND version=?"
+      ).bind(TaskStatus.IN_PROGRESS, agentId, version, now, current.startedAt ?? now,
+        current.id, TaskStatus.QUEUED, current.version),
       this.db.prepare(
         `INSERT INTO task_events (id,task_id,type,occurred_at,idempotency_key,payload)
          SELECT ?,?,?,?,?,? WHERE changes()=1`
@@ -141,6 +193,7 @@ export class D1TaskStore implements TaskStore {
       version,
       updatedAt: now,
       assignedAgentId: agentId
+      ,startedAt: current.startedAt ?? now
     };
   }
 
@@ -148,10 +201,10 @@ export class D1TaskStore implements TaskStore {
     const eventResult = await this.db.prepare(
       "SELECT sequence,id,task_id,type,occurred_at,idempotency_key,payload FROM task_events WHERE sequence > ? ORDER BY sequence"
     ).bind(cursor).all<{
-      sequence: number; id: string; task_id: string; type: TaskEvent["type"];
+      sequence: number; id: string; task_id: string; type: LifecycleEvent["type"];
       occurred_at: string; idempotency_key: string; payload: string;
     }>();
-    const events: TaskEvent[] = eventResult.results.map((row) => ({
+    const events: LifecycleEvent[] = eventResult.results.map((row) => ({
       id: row.id,
       taskId: row.task_id,
       type: row.type,
@@ -200,10 +253,18 @@ export class D1TaskStore implements TaskStore {
 
   async addEvidence(taskId: string, evidence: Evidence): Promise<void> {
     if (!await this.getTask(taskId)) throw new Error("task_not_found");
-    await this.db.prepare(
-      "INSERT INTO task_evidence (id,task_id,kind,summary,reference,created_at) VALUES (?,?,?,?,?,?)"
-    ).bind(crypto.randomUUID(), taskId, evidence.kind, evidence.summary,
-      evidence.reference ?? null, new Date().toISOString()).run();
+    const now = new Date().toISOString();
+    const evidenceId = crypto.randomUUID();
+    await this.db.batch([
+      this.db.prepare(
+        "INSERT INTO task_evidence (id,task_id,kind,summary,reference,created_at) VALUES (?,?,?,?,?,?)"
+      ).bind(evidenceId, taskId, evidence.kind, evidence.summary, evidence.reference ?? null, now),
+      this.db.prepare(
+        `INSERT INTO task_events (id,task_id,type,occurred_at,idempotency_key,payload)
+         VALUES (?,?,?,?,?,?)`
+      ).bind(crypto.randomUUID(), taskId, "evidence_added", now, `evidence:${taskId}:${evidenceId}`,
+        JSON.stringify({ kind: evidence.kind, summary: evidence.summary, reference: evidence.reference }))
+    ]);
   }
 
   async hasEvidence(taskId: string): Promise<boolean> {

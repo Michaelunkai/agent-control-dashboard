@@ -9,7 +9,10 @@ export function createAdapterHttpServer(
   return createServer((request, response) => {
     if (request.method === "GET" && request.url === "/health") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ status: "ok", pending: store.pending().length }));
+      response.end(JSON.stringify({
+        status: "ok", pending: store.pending().length,
+        managedTaskId: store.managedTaskId() ?? null
+      }));
       return;
     }
     if (request.method !== "POST" || request.url !== "/hooks") {

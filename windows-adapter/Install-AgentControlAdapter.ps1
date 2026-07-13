@@ -34,7 +34,7 @@ if (-not $document.hooks) {
 }
 
 $command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$hook`""
-foreach ($eventName in @("SessionStart", "UserPromptSubmit", "Stop")) {
+foreach ($eventName in @("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd")) {
     $current = @($document.hooks.$eventName)
     $filtered = @($current | Where-Object {
         $commands = @($_.hooks | ForEach-Object { $_.commandWindows; $_.command_windows; $_.command })
@@ -43,7 +43,7 @@ foreach ($eventName in @("SessionStart", "UserPromptSubmit", "Stop")) {
     $entry = [pscustomobject]@{
         hooks = @([pscustomobject]@{
             type = "command"
-            commandWindows = $command
+            command = $command
             timeout = 5
             statusMessage = "Updating Agent Control"
         })

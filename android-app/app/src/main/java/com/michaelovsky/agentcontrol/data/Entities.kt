@@ -15,7 +15,21 @@ data class TaskEntity(
     val createdAt: String,
     val updatedAt: String,
     val assignedAgentId: String? = null,
+    val progressPercent: Int? = null,
+    val currentStep: String? = null,
+    val startedAt: String? = null,
+    val completedAt: String? = null,
     val syncState: String = "pending"
+)
+
+@Entity(tableName = "task_events")
+data class TaskEventEntity(
+    @PrimaryKey val id: String,
+    val taskId: String,
+    val type: String,
+    val message: String,
+    val createdAt: String,
+    val progressPercent: Int? = null
 )
 
 @Entity(tableName = "outbox")

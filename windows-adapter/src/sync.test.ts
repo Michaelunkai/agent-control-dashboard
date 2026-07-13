@@ -9,7 +9,8 @@ import {
   failTask,
   flushOutbox,
   registerAgent,
-  sendHeartbeat
+  sendHeartbeat,
+  updateTaskStage
 } from "./sync.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -82,6 +83,23 @@ describe("agent presence", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("clears a managed binding only after the control plane reports a terminal state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-control-sync-"));
+    const store = new AdapterStore(join(root, "adapter.db"));
+    store.bindManagedSession("task-managed", "session-managed");
+    store.enqueue({
+      id: "managed-stop", eventName: "SessionEnd", sessionId: "session-managed",
+      occurredAt: new Date().toISOString(), payload: {}
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "DONE" }), {
+      status: 200, headers: { "content-type": "application/json" }
+    })));
+    expect(await flushOutbox(store, "https://control.example", "owner")).toBe(1);
+    expect(store.managedTaskId()).toBeUndefined();
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("claims compatible work and handles an empty queue", async () => {
     const task = { id: "task-1", title: "Test task", description: "Run it", status: "IN_PROGRESS", version: 3 };
     const fetchMock = vi.fn()
@@ -94,10 +112,35 @@ describe("agent presence", () => {
     expect(await claimTask("https://control.example", "owner", "desktop-1")).toBeUndefined();
   });
 
+  it("reports managed executor stages and returns the updated task version", async () => {
+    const changed = {
+      id: "task-1", title: "Test", description: "Run it", status: "IN_PROGRESS", version: 4,
+      progressPercent: 15, currentStep: "Preparing"
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(changed), {
+      status: 200, headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await updateTaskStage(
+      "https://control.example", "owner",
+      { id: "task-1", title: "Test", description: "Run it", status: "IN_PROGRESS", version: 3 },
+      "Preparing", 15
+    );
+    expect(result).toEqual(changed);
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
+      currentStep: "Preparing",
+      progressPercent: 15,
+      expectedVersion: 3
+    });
+  });
+
   it("uploads evidence, verifies, and completes successful work", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response("{}", { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ version: 4 }), {
+        status: 200, headers: { "content-type": "application/json" }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ version: 5 }), {
         status: 200, headers: { "content-type": "application/json" }
       }))
       .mockResolvedValueOnce(new Response("{}", { status: 200 }));
@@ -112,8 +155,31 @@ describe("agent presence", () => {
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
       "https://control.example/v1/tasks/task-1/evidence",
       "https://control.example/v1/tasks/task-1/transition",
+      "https://control.example/v1/tasks/task-1/progress",
       "https://control.example/v1/tasks/task-1/complete"
     ]);
+    expect(JSON.parse(String((fetchMock.mock.calls[2][1] as RequestInit).body))).toEqual({
+      currentStep: "Complete",
+      progressPercent: 100,
+      expectedVersion: 4
+    });
+  });
+
+  it("still completes after a non-authoritative final progress failure", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ version: 4 }), {
+        status: 200, headers: { "content-type": "application/json" }
+      }))
+      .mockResolvedValueOnce(new Response("progress failed", { status: 503 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await completeTask(
+      "https://control.example", "owner",
+      { id: "task-1", title: "Test", description: "Test", status: "IN_PROGRESS", version: 3 },
+      "Session started", "windows-local:session.txt"
+    );
+    expect(String(fetchMock.mock.calls[3][0])).toBe("https://control.example/v1/tasks/task-1/complete");
   });
 
   it("reports failed Codex execution", async () => {
